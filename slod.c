@@ -164,9 +164,7 @@ void index_dir(int fd, const char *realpath, const char *path)
 	writen(fd, "</title></head><body><ul>");
 
 	while(n--) {
-		writen(fd, "<li><a href=\"");
-		writen(fd, path);
-		writen(fd, "/");
+		writen(fd, "<li><a href=\"./");
 		writen(fd, namelist[n]->d_name);
 		writen(fd, "\">");
 		writen(fd, namelist[n]->d_name);
@@ -180,7 +178,7 @@ void index_dir(int fd, const char *realpath, const char *path)
 
 void respond(int client)
 {
-	char msg[99999], data_to_send[BYTES], realpath[99999];
+	char msg[99999], data_to_send[BYTES], realpath[99999], indexpath[99999];
 	char *method, *path, *protocol;
 	int rcvd, fd, bytes_read;
 	struct stat path_stat;
@@ -198,7 +196,7 @@ void respond(int client)
 			protocol = strtok(NULL, " \t\n");
 
 			if (strncmp(protocol, "HTTP/1.1", 8) != 0) {
-				write(client, "HTTP/1.1 400 Bad Request\n\n", 26);
+				writen(client, "HTTP/1.1 400 Bad Request\n\n");
 				goto stop;
 			}
 
@@ -208,33 +206,53 @@ void respond(int client)
 			path_len = strlen(realpath);
 
 			// remove trailing slash
-			if (realpath[path_len - 1] == '/') {
-				realpath[path_len - 1] = '\0';
-			}
+			// if (realpath[path_len - 1] == '/') {
+			// 	realpath[path_len - 1] = '\0';
+			// }
 
 			printf("GET %s\n", realpath);
+
+			if (access(realpath, F_OK) < 0) {
+				writen(client, "HTTP/1.1 404 Not Found\n\n");
+				goto stop;
+			}
 
 			stat(realpath, &path_stat);
 
 			if (S_ISDIR(path_stat.st_mode) != 0) {
-				write(client, "HTTP/1.1 202 OK\n\n", 17);
-				index_dir(client, realpath, path);
-				goto stop;
+				// if the path does not end with a slash, redirect
+				if (path[strlen(path) - 1] != '/') {
+					writen(client, "HTTP/1.1 301 Moved Permanently\nLocation: ");
+					writen(client, path);
+					writen(client, "/\n\n");
+					goto stop;
+				}
+
+
+				strcpy(indexpath, realpath);
+				strcpy(indexpath + strlen(realpath), "/index.html");
+
+				if (access(indexpath, R_OK) < 0) {
+					writen(client, "HTTP/1.1 202 OK\n\n");
+					index_dir(client, realpath, path);
+					goto stop;
+				}
+
+				strcpy(realpath, indexpath);
 			}
 
-			if ((fd = open(realpath, O_RDONLY)) < 0) {
-				write(client, "HTTP/1.1 404 Not Found\n\n", 24);
-				goto stop;
-			}
 
-			write(client, "HTTP/1.1 202 OK\n\n", 17);
+			if ((fd = open(realpath, O_RDONLY)) < 0)
+				goto stop;
+
+			writen(client, "HTTP/1.1 202 OK\n\n");
 
 			// TODO: inject script in html file
 			while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
 				write(client, data_to_send, bytes_read);
 		}
 		else {
-			printf("Not a GET request\n");
+			fprintf(stderr, "Not a GET request\n");
 		}
 	}
 
