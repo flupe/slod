@@ -2,38 +2,61 @@
 #include<string.h>
 #include<stdlib.h>
 #include<unistd.h>
-#include<sys/types.h>
-#include<sys/stat.h>
-#include<sys/socket.h>
 #include<netdb.h>
 #include<fcntl.h>
+#include<getopt.h>
 #include<sys/inotify.h>
 
 #define BYTES 1024
 #define MAXPENDING 5
 
-char *root;
+char *port = "8000";
+char *root = NULL;
+
 int listenfd;
 int notifyfd;
 
 void start(char *port);
 void respond(int n);
 
+static const char usage[] = "Usage: %s [options] [ROOT]\n"
+"  -h, --help       Show this help message and quit.\n"
+"  -p, --port PORT  Specify port to listen on.\n";
+
+
+static const struct option long_options[] = {
+	{"help", no_argument,       0, 'h'},
+	{"port", required_argument, 0, 'p'},
+	{0},
+};
+
 int main(int argc, char* argv[])
 {
 	struct sockaddr_in clientaddr;
 	socklen_t addrlen;
-	int client;
-	char *port;
+	int client, option;
 
-	if (argc > 1) {
-		port = argv[1];
+	while ((option = getopt_long(argc, argv, "hp:", long_options, NULL)) != -1) {
+		switch (option) {
+			case 'p':
+				port = optarg;
+				break;
+			case 'h':
+				fprintf(stderr, usage, argv[0]);
+				return EXIT_SUCCESS;
+			default:
+				fprintf(stderr, usage, argv[0]);
+				return EXIT_FAILURE;
+		}
+	}
+
+	if (optind == argc) {
+		root = getenv("PWD");
 	}
 	else {
-		port = "8000";
+		root = argv[optind];
 	}
 
-	root = getenv("PWD");
 	printf("Starting server on port %s in %s\n", port, root);
 	start(port);
 
