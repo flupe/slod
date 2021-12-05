@@ -109,6 +109,8 @@ void start(char *port)
 	for (p = res; p != NULL; p = p->ai_next) {
 		listenfd = socket(p->ai_family, p->ai_socktype, 0);
 		if (listenfd == -1) continue;
+	    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
+	    	perror("setsockopt(SO_REUSEADDR) error");
 		if (bind(listenfd, p->ai_addr, p->ai_addrlen) == 0) break;
 		close(listenfd);
 	}
@@ -120,8 +122,6 @@ void start(char *port)
 		exit(EXIT_FAILURE);
 	}
 
-	if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
-		perror("setsockopt(SO_REUSEADDR) error");
 
 	if (listen(listenfd, MAXPENDING) != 0) {
 		perror("listen() error");
@@ -156,7 +156,12 @@ void index_dir(int fd, const char *realpath, const char *path)
 		return;
 	}
 
-	writen(fd, "<!doctype html><html><body><ul>");
+	writen(fd, "<!doctype html><html>"
+			   "<head><meta charset=\"utf-8\"><title>");
+	
+	writen(fd, path);
+
+	writen(fd, "</title></head><body><ul>");
 
 	while(n--) {
 		writen(fd, "<li><a href=\"");
