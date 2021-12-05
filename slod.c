@@ -1,17 +1,22 @@
 #include<stdio.h>
+#include<stdbool.h>
 #include<string.h>
 #include<stdlib.h>
 #include<unistd.h>
 #include<netdb.h>
 #include<fcntl.h>
 #include<getopt.h>
+#include<signal.h>
 #include<sys/inotify.h>
+#include<sys/stat.h>
+#include<dirent.h>
 
 #define BYTES 1024
 #define MAXPENDING 5
 
 char *port = "8000";
 char *root = NULL;
+bool watch = false;
 
 int listenfd;
 int notifyfd;
@@ -19,14 +24,24 @@ int notifyfd;
 void start(char *port);
 void respond(int n);
 
+void handler(int sig)
+{
+	// \b\b for removing ^C, maybe this is caused to my terminal
+	printf("\b\bShutting down server\n");
+	close(listenfd);
+	exit(EXIT_SUCCESS);
+}
+
 static const char usage[] = "Usage: %s [options] [ROOT]\n"
 "  -h, --help       Show this help message and quit.\n"
-"  -p, --port PORT  Specify port to listen on.\n";
+"  -p, --port PORT  Specify port to listen on.\n"
+"  -l, --live       Enable livereload.\n";
 
 
 static const struct option long_options[] = {
 	{"help", no_argument,       0, 'h'},
 	{"port", required_argument, 0, 'p'},
+	{"live", no_argument,       0, 'l'},
 	{0},
 };
 
@@ -38,10 +53,13 @@ int main(int argc, char* argv[])
 
 	while ((option = getopt_long(argc, argv, "hp:", long_options, NULL)) != -1) {
 		switch (option) {
-			case 'p':
+			case 'p': // custom port
 				port = optarg;
 				break;
-			case 'h':
+			case 'l': // enable livereload
+				watch = true;
+				break;
+			case 'h': // display help
 				fprintf(stderr, usage, argv[0]);
 				return EXIT_SUCCESS;
 			default:
@@ -59,6 +77,8 @@ int main(int argc, char* argv[])
 
 	printf("Starting server on port %s in %s\n", port, root);
 	start(port);
+
+	signal(SIGINT, handler);
 
 	// TODO: handling requests in parallel
 	while (1) {
@@ -99,6 +119,9 @@ void start(char *port)
 		exit(EXIT_FAILURE);
 	}
 
+	if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
+		perror("setsockopt(SO_REUSEADDR) error");
+
 	if (listen(listenfd, MAXPENDING) != 0) {
 		perror("listen() error");
 		exit(1);
@@ -114,10 +137,43 @@ void start(char *port)
 	// }
 }
 
+
+void writen(int fd, const char *text)
+{
+	write(fd, text, strlen(text));
+}
+
+void index_dir(int fd, const char *path)
+{
+	struct dirent **namelist;
+	int n;
+
+	if ((n = scandir(path, &namelist, NULL, alphasort)) < 0) {
+		fprintf(stderr, "Failed to scan directory %s\n", path);
+		return;
+	}
+
+	writen(fd, "<!doctype html><html><body><ul>");
+
+	while(n--) {
+		writen(fd, "<li><a href=\"./");
+		writen(fd, namelist[n]->d_name);
+		writen(fd, "\">");
+		writen(fd, namelist[n]->d_name);
+		writen(fd, "</a></li>");
+	}
+
+	writen(fd, "</ul></body></html>");
+
+	free(namelist);
+}
+
 void respond(int client)
 {
 	char msg[99999], *reqline[3], data_to_send[BYTES], path[99999];
 	int rcvd, fd, bytes_read;
+	struct stat path_stat;
+	size_t path_len;
 
 	memset((void*) msg, '\0', 99999);
 	rcvd = recv(client, msg, 99999, 0);
@@ -138,7 +194,22 @@ void respond(int client)
 			strcpy(path, root);
 			strcpy(path + strlen(root), reqline[1]);
 
+			path_len = strlen(path);
+
+			// remove trailing slash
+			if (path[path_len - 1] == '/') {
+				path[path_len - 1] = '\0';
+			}
+
 			printf("GET: %s\n", path);
+
+			stat(path, &path_stat);
+
+			if (S_ISDIR(path_stat.st_mode) != 0) {
+				write(client, "HTTP/1.1 202 OK\n\n", 17);
+				index_dir(client, path);
+				goto stop;
+			}
 
 			if ((fd = open(path, O_RDONLY)) < 0) {
 				write(client, "HTTP/1.1 404 Not Found\n\n", 24);
@@ -146,6 +217,8 @@ void respond(int client)
 			}
 
 			write(client, "HTTP/1.1 202 OK\n\n", 17);
+
+			// TODO: inject script in html file
 			while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
 				write(client, data_to_send, bytes_read);
 		}
