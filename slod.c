@@ -28,6 +28,7 @@ void handler(int sig)
 {
 	// \b\b for removing ^C, maybe this is caused to my terminal
 	printf("\b\bShutting down server\n");
+	shutdown(listenfd, SHUT_RDWR);
 	close(listenfd);
 	exit(EXIT_SUCCESS);
 }
@@ -143,12 +144,14 @@ void writen(int fd, const char *text)
 	write(fd, text, strlen(text));
 }
 
-void index_dir(int fd, const char *path)
+void index_dir(int fd, const char *realpath, const char *path)
 {
 	struct dirent **namelist;
 	int n;
 
-	if ((n = scandir(path, &namelist, NULL, alphasort)) < 0) {
+	if (path[0] == '/') path++;
+
+	if ((n = scandir(realpath, &namelist, NULL, alphasort)) < 0) {
 		fprintf(stderr, "Failed to scan directory %s\n", path);
 		return;
 	}
@@ -156,7 +159,9 @@ void index_dir(int fd, const char *path)
 	writen(fd, "<!doctype html><html><body><ul>");
 
 	while(n--) {
-		writen(fd, "<li><a href=\"./");
+		writen(fd, "<li><a href=\"");
+		writen(fd, path);
+		writen(fd, "/");
 		writen(fd, namelist[n]->d_name);
 		writen(fd, "\">");
 		writen(fd, namelist[n]->d_name);
@@ -170,7 +175,8 @@ void index_dir(int fd, const char *path)
 
 void respond(int client)
 {
-	char msg[99999], *reqline[3], data_to_send[BYTES], path[99999];
+	char msg[99999], data_to_send[BYTES], realpath[99999];
+	char *method, *path, *protocol;
 	int rcvd, fd, bytes_read;
 	struct stat path_stat;
 	size_t path_len;
@@ -181,37 +187,37 @@ void respond(int client)
 	if      (rcvd  < 0) fprintf(stderr, "recv() error\n");
 	else if (rcvd == 0) fprintf(stderr, "Client got disconnected\n");
 	else {
-		reqline[0] = strtok(msg, " \t\n");
-		if (strncmp(reqline[0], "GET\0", 4) == 0) {
-			reqline[1] = strtok(NULL, " \t");
-			reqline[2] = strtok(NULL, " \t\n");
+		method = strtok(msg, " \t\n");
+		if (strncmp(method, "GET\0", 4) == 0) {
+			path     = strtok(NULL, " \t");
+			protocol = strtok(NULL, " \t\n");
 
-			if (strncmp(reqline[2], "HTTP/1.1", 8) != 0) {
+			if (strncmp(protocol, "HTTP/1.1", 8) != 0) {
 				write(client, "HTTP/1.1 400 Bad Request\n\n", 26);
 				goto stop;
 			}
 
-			strcpy(path, root);
-			strcpy(path + strlen(root), reqline[1]);
+			strcpy(realpath, root);
+			strcpy(realpath + strlen(root), path);
 
-			path_len = strlen(path);
+			path_len = strlen(realpath);
 
 			// remove trailing slash
-			if (path[path_len - 1] == '/') {
-				path[path_len - 1] = '\0';
+			if (realpath[path_len - 1] == '/') {
+				realpath[path_len - 1] = '\0';
 			}
 
-			printf("GET: %s\n", path);
+			printf("GET %s\n", realpath);
 
-			stat(path, &path_stat);
+			stat(realpath, &path_stat);
 
 			if (S_ISDIR(path_stat.st_mode) != 0) {
 				write(client, "HTTP/1.1 202 OK\n\n", 17);
-				index_dir(client, path);
+				index_dir(client, realpath, path);
 				goto stop;
 			}
 
-			if ((fd = open(path, O_RDONLY)) < 0) {
+			if ((fd = open(realpath, O_RDONLY)) < 0) {
 				write(client, "HTTP/1.1 404 Not Found\n\n", 24);
 				goto stop;
 			}
