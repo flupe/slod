@@ -34,9 +34,9 @@ void handler(int sig)
 }
 
 static const char usage[] = "Usage: %s [options] [ROOT]\n"
-"  -h, --help       Show this help message and quit.\n"
-"  -p, --port PORT  Specify port to listen on.\n"
-"  -l, --live       Enable livereload.\n";
+"  -h, --help       Show this help message and quit\n"
+"  -p, --port PORT  Specify port to listen on\n"
+"  -l, --live       Enable livereload\n";
 
 
 static const struct option long_options[] = {
