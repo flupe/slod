@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include<stdio.h>
 #include<stdbool.h>
 #include<string.h>
@@ -15,10 +13,12 @@
 
 #define BYTES 1024
 #define MAXPENDING 5
+#define DIGIT(x) '0' <= x && x <= '9'
 
 char *port = "8000";
 char *root = NULL;
 bool watch = false;
+bool hide  = false;
 
 int listenfd;
 int notifyfd;
@@ -36,13 +36,15 @@ void handler(int sig)
 static const char usage[] = "Usage: %s [options] [ROOT]\n"
 "  -h, --help       Show this help message and quit\n"
 "  -p, --port PORT  Specify port to listen on\n"
+"      --no-hidden  Do not show hidden files on directory index\n"
 "  -l, --live       Enable livereload\n";
 
 
 static const struct option long_options[] = {
-	{"help", no_argument,       0, 'h'},
-	{"port", required_argument, 0, 'p'},
-	{"live", no_argument,       0, 'l'},
+	{"help",      no_argument,       0, 'h'},
+	{"port",      required_argument, 0, 'p'},
+	{"live",      no_argument,       0, 'l'},
+	{"no-hidden", no_argument,       0, 'n'},
 	{0},
 };
 
@@ -52,7 +54,7 @@ int main(int argc, char* argv[])
 	socklen_t addrlen;
 	int client, option;
 
-	while ((option = getopt_long(argc, argv, "hp:", long_options, NULL)) != -1) {
+	while ((option = getopt_long(argc, argv, "hp:l", long_options, NULL)) != -1) {
 		switch (option) {
 			case 'p': // custom port
 				port = optarg;
@@ -63,6 +65,9 @@ int main(int argc, char* argv[])
 			case 'h': // display help
 				fprintf(stderr, usage, argv[0]);
 				return EXIT_SUCCESS;
+			case 'n': // hide hidden files
+				hide = true;
+				break;
 			default:
 				fprintf(stderr, usage, argv[0]);
 				return EXIT_FAILURE;
@@ -138,6 +143,35 @@ void start(char *port)
 	// }
 }
 
+int cmpfiles(const struct dirent **a, const struct dirent **b) {
+	const char *x = (*a)->d_name, *y = (*b)->d_name;
+	size_t k, kx, ky;
+
+	for (k = 0; k < 256; k++) {
+		if (x[k] == '\0') return 0;
+		if (y[k] == '\0') return 1;
+
+		if (DIGIT(x[k]) && DIGIT(y[k])) {
+			kx = ky = k;
+			while (DIGIT(x[kx+1])) kx++;
+			while (DIGIT(y[ky+1])) ky++;
+
+			if (kx < ky) return 0;
+			if (ky < kx) return 1;
+
+			while (k < kx) {
+		      if (x[k] < y[k]) return 0;
+		      if (x[k] > y[k]) return 1;
+			  k++;
+			}
+		}
+
+		if (x[k] < y[k]) return 0;
+		if (x[k] > y[k]) return 1;
+	}
+
+	return 0;
+};
 
 void index_dir(int fd, const char *realpath, const char *path)
 {
@@ -150,7 +184,7 @@ void index_dir(int fd, const char *realpath, const char *path)
 
 	if (path[0] == '/') path++;
 
-	if ((n = scandir(realpath, &namelist, NULL, versionsort)) < 0) {
+	if ((n = scandir(realpath, &namelist, NULL, cmpfiles)) < 0) {
 		fprintf(stderr, "Failed to scan directory %s\n", path);
 		return;
 	}
@@ -175,9 +209,10 @@ void index_dir(int fd, const char *realpath, const char *path)
 
 		// never display .
 		if (strcmp(filename, ".") == 0) continue;
-
-		// do not display .. for root
-		if (path[0] == '\0' && strcmp(filename, "..") == 0) continue;
+		// never display .. for root
+		else if (strcmp(filename, "..") == 0) { if (path[0] == '\0') continue; }
+		// possibly skip hidden file
+		else if (hide && filename[0] == '.') continue;
 
 		strcpy(fullpath, realpath);
 		strcat(fullpath, filename);
@@ -260,7 +295,7 @@ void respond(int client)
 		if ((fd = open(realpath, O_RDONLY)) < 0)
 			goto stop;
 
-		dprintf(client, "HTTP/1.1 202 OK\n\n");
+		dprintf(client, "HTTP/1.1 202 OK\nCache-Control: no-store\n\n");
 
 		// TODO: inject script in html file
 		while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
