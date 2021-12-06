@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include<stdio.h>
 #include<stdbool.h>
 #include<string.h>
@@ -26,9 +28,7 @@ void respond(int n);
 
 void handler(int sig)
 {
-	// \b\b for removing ^C, maybe this is caused to my terminal
 	printf("\b\bShutting down server\n");
-	shutdown(listenfd, SHUT_RDWR);
 	close(listenfd);
 	exit(EXIT_SUCCESS);
 }
@@ -117,7 +117,7 @@ void start(char *port)
 
 	freeaddrinfo(res);
 
-	if (p==NULL) {
+	if (p == NULL) {
 		perror("socket() or bind() error");
 		exit(EXIT_FAILURE);
 	}
@@ -125,7 +125,7 @@ void start(char *port)
 
 	if (listen(listenfd, MAXPENDING) != 0) {
 		perror("listen() error");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	// if ((notifyfd = inotify_init()) != 0) {
@@ -139,39 +139,54 @@ void start(char *port)
 }
 
 
-void writen(int fd, const char *text)
-{
-	write(fd, text, strlen(text));
-}
-
 void index_dir(int fd, const char *realpath, const char *path)
 {
 	struct dirent **namelist;
-	int n;
+	char filename[9999], fullpath[9999];
+	struct stat path_stat;
+	int n, k;
+	bool isDir;
+	size_t len;
 
 	if (path[0] == '/') path++;
 
-	if ((n = scandir(realpath, &namelist, NULL, alphasort)) < 0) {
+	if ((n = scandir(realpath, &namelist, NULL, versionsort)) < 0) {
 		fprintf(stderr, "Failed to scan directory %s\n", path);
 		return;
 	}
 
-	writen(fd, "<!doctype html><html>"
-			   "<head><meta charset=\"utf-8\"><title>");
-	
-	writen(fd, path);
+	dprintf(fd, "<!doctype html><html>"
+			     "<head><meta charset=\"utf-8\">"
+				 "<title>%s</title>"
+				 "<style>body{font:16px monospace;margin:2em;line-height:1.6}"
+				 "ul{padding:0;list-style:none;margin:0}"
+				 "a{text-decoration:none}a:hover{background:#eee}"
+				 "@media(prefers-color-scheme:dark){"
+				 "body{background:#222;color:#fff}"
+				 "a{color:#fff}a:visited{color:#aaa}a:hover{background:#333}"
+				 "}</style>"
+				 "</head><body><ul>", path);
 
-	writen(fd, "</title></head><body><ul>");
+	for(k = 0; k < n; k++) {
+		strcpy(filename, namelist[k]->d_name);
 
-	while(n--) {
-		writen(fd, "<li><a href=\"./");
-		writen(fd, namelist[n]->d_name);
-		writen(fd, "\">");
-		writen(fd, namelist[n]->d_name);
-		writen(fd, "</a></li>");
+		// never display .
+		if (strcmp(filename, ".") == 0) continue;
+
+		// do not display .. for root
+		if (path[0] == '\0' && strcmp(filename, "..") == 0) continue;
+
+		strcpy(fullpath, realpath);
+		strcat(fullpath, filename);
+
+		// if folder, append /
+		stat(fullpath, &path_stat);
+		if (S_ISDIR(path_stat.st_mode) != 0) strcat(filename, "/");
+
+		dprintf(fd, "<li><a href=\"./%s\">%s</a></li>", filename, filename);
 	}
 
-	writen(fd, "</ul></body></html>");
+	dprintf(fd, "</ul></body></html>");
 
 	free(namelist);
 }
@@ -190,70 +205,63 @@ void respond(int client)
 	if      (rcvd  < 0) fprintf(stderr, "recv() error\n");
 	else if (rcvd == 0) fprintf(stderr, "Client got disconnected\n");
 	else {
-		method = strtok(msg, " \t\n");
-		if (strncmp(method, "GET\0", 4) == 0) {
-			path     = strtok(NULL, " \t");
-			protocol = strtok(NULL, " \t\n");
+		method   = strtok(msg, " \t\n");
+		path     = strtok(NULL, " \t");
+		protocol = strtok(NULL, " \t\n");
 
-			if (strncmp(protocol, "HTTP/1.1", 8) != 0) {
-				writen(client, "HTTP/1.1 400 Bad Request\n\n");
-				goto stop;
-			}
-
-			strcpy(realpath, root);
-			strcpy(realpath + strlen(root), path);
-
-			path_len = strlen(realpath);
-
-			// remove trailing slash
-			// if (realpath[path_len - 1] == '/') {
-			// 	realpath[path_len - 1] = '\0';
-			// }
-
-			printf("GET %s\n", realpath);
-
-			if (access(realpath, F_OK) < 0) {
-				writen(client, "HTTP/1.1 404 Not Found\n\n");
-				goto stop;
-			}
-
-			stat(realpath, &path_stat);
-
-			if (S_ISDIR(path_stat.st_mode) != 0) {
-				// if the path does not end with a slash, redirect
-				if (path[strlen(path) - 1] != '/') {
-					writen(client, "HTTP/1.1 301 Moved Permanently\nLocation: ");
-					writen(client, path);
-					writen(client, "/\n\n");
-					goto stop;
-				}
-
-
-				strcpy(indexpath, realpath);
-				strcpy(indexpath + strlen(realpath), "/index.html");
-
-				if (access(indexpath, R_OK) < 0) {
-					writen(client, "HTTP/1.1 202 OK\n\n");
-					index_dir(client, realpath, path);
-					goto stop;
-				}
-
-				strcpy(realpath, indexpath);
-			}
-
-
-			if ((fd = open(realpath, O_RDONLY)) < 0)
-				goto stop;
-
-			writen(client, "HTTP/1.1 202 OK\n\n");
-
-			// TODO: inject script in html file
-			while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
-				write(client, data_to_send, bytes_read);
+		if (strncmp(method, "GET\0", 4) != 0 || strncmp(protocol, "HTTP/1.1", 8) != 0) {
+			dprintf(client, "HTTP/1.1 400 Bad Request\n\n");
+			goto stop;
 		}
-		else {
-			fprintf(stderr, "Not a GET request\n");
+
+		strcpy(realpath, root);
+		strcpy(realpath + strlen(root), path);
+
+		path_len = strlen(realpath);
+
+		// remove trailing slash
+		// if (realpath[path_len - 1] == '/') {
+		// 	realpath[path_len - 1] = '\0';
+		// }
+
+		printf("GET %s\n", realpath);
+
+		if (access(realpath, F_OK) < 0) {
+			dprintf(client, "HTTP/1.1 404 Not Found\n\n");
+			goto stop;
 		}
+
+		stat(realpath, &path_stat);
+
+		if (S_ISDIR(path_stat.st_mode) != 0) {
+			// if the path does not end with a slash, redirect
+			if (path[strlen(path) - 1] != '/') {
+				dprintf(client, "HTTP/1.1 301 Moved Permanently\nLocation: %s/\n\n", path);
+				goto stop;
+			}
+
+			strcpy(indexpath, realpath);
+			strcpy(indexpath + strlen(realpath), "/index.html");
+
+			if (access(indexpath, R_OK) < 0) {
+				// problem: we write many times, if the client stops listening it's not good
+				dprintf(client, "HTTP/1.1 202 OK\n\n");
+				index_dir(client, realpath, path);
+				goto stop;
+			}
+
+			strcpy(realpath, indexpath);
+		}
+
+
+		if ((fd = open(realpath, O_RDONLY)) < 0)
+			goto stop;
+
+		dprintf(client, "HTTP/1.1 202 OK\n\n");
+
+		// TODO: inject script in html file
+		while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
+			write(client, data_to_send, bytes_read);
 	}
 
 stop:

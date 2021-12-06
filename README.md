@@ -13,4 +13,14 @@ for serving static files with live reloading[^1].
       -p, --port PORT  Specify port to listen on
       -l, --live       Enable livereload
 
+## Issues
+
+- No live reloading yet.
+
+- If a client closes the connection too early and doesn't listen,
+  we crash.
+
+      curl -I localhost:8000
+
+
 [^1]: Not yet, but it's already quite useful (to me).
