@@ -157,10 +157,13 @@ void index_dir(int fd, const char *realpath, const char *path)
 
 	dprintf(fd, "<!doctype html><html>"
 			     "<head><meta charset=\"utf-8\">"
+				 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
 				 "<title>%s</title>"
 				 "<style>body{font:16px monospace;margin:2em;line-height:1.6}"
 				 "ul{padding:0;list-style:none;margin:0}"
+				 "li{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}"
 				 "a{text-decoration:none}a:hover{background:#eee}"
+				 "@media screen and (max-width:500px){body{font-size:14px}}"
 				 "@media(prefers-color-scheme:dark){"
 				 "body{background:#222;color:#fff}"
 				 "a{color:#fff}a:visited{color:#aaa}a:hover{background:#333}"
